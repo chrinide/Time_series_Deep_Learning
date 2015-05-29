@@ -351,8 +351,8 @@ class CRBM(object):
 
 
 def train_crbm(learning_rate=0.01, training_epochs=1000,
-             dataset='/Experiment_1/Data_ver3_crbm_data', batch_size=100,
-             n_hidden=10, delay=30):
+             dataset='/Experiment_1/Data_ver3_crbm_data', batch_size=30,
+             n_hidden=10, delay=31):
     """
     Demonstrate how to train a CRBM.
     This is demonstrated on mocap data.
@@ -372,7 +372,6 @@ def train_crbm(learning_rate=0.01, training_epochs=1000,
 
     # batchdata is returned as theano shared variable floatX
     batchdata, seqlen, data_mean, data_std = load_data_label(dataset)
-    print batchdata.get_value(borrow=True)
     # compute number of minibatches for training, validation and testing
     n_train_batches = batchdata.get_value(borrow=True).shape[0] / batch_size
     
@@ -416,7 +415,7 @@ def train_crbm(learning_rate=0.01, training_epochs=1000,
     #################################
 
     # the purpose of train_crbm is solely to update the CRBM parameters
-    theano.printing.Print(updates)
+    
     train_crbm = theano.function([index, index_hist, theano.Param(momentum, default=0.9)], 
             outputs=cost,
             updates=updates,
@@ -424,6 +423,28 @@ def train_crbm(learning_rate=0.01, training_epochs=1000,
                    x_history: batchdata[index_hist].reshape((
                    x[index].shape[0], delay * n_dim))},
            name='train_crbm')
+
+    # To compute free energy of the data set.
+    free_energy = crbm.free_energy(x, x_history)
+
+    over_fit = theano.function([index, index_hist],
+                    outputs=free_energy,
+                    givens={x: batchdata[index], 
+                    x_history: batchdata[index_hist].reshape((
+                    x[index].shape[0], delay * n_dim))},
+                    name='over_fit')
+
+
+    hidden_layer = crbm.propup(x, x_history)
+
+    gen_hidden = theano.function([index, index_hist],
+                    outputs=hidden_layer,
+                    givens={x: batchdata[index], 
+                    x_history: batchdata[index_hist].reshape((
+                    x[index].shape[0], delay * n_dim))},
+                    name='gen_hidden')
+        
+
 
     plotting_time = 0.
     start_time = time.clock()
@@ -434,7 +455,7 @@ def train_crbm(learning_rate=0.01, training_epochs=1000,
         # go through the training set
         mean_cost = []
 
-        for batch_index in xrange(n_train_batches):
+        for batch_index in xrange(n_train_batches-1):
             # indexing is slightly complicated
             # build a linear index to the starting frames for this batch
             # (i.e. time t) gives a batch_size length array for data
@@ -455,10 +476,27 @@ def train_crbm(learning_rate=0.01, training_epochs=1000,
 
         
             this_cost = train_crbm(data_idx, hist_idx.ravel(), momentum)
-            #print batch_index, this_cost
+            
             mean_cost += [this_cost]
 
-        print 'Training epoch %d, cost is ' % epoch, numpy.mean(mean_cost)
+            train_energ = np.mean(over_fit(data_idx, hist_idx.ravel()))
+
+            batch_train_end = batch_index == (n_train_batches-2)
+        
+
+            if batch_train_end:
+                batch_index = batch_index + 1
+
+                valid_idx = permindex[batch_index * batch_size:(batch_index + 1) \
+                                    * batch_size]
+                valid_hist_idx = np.array([valid_idx - n for n in xrange(1, delay + 1)]).T
+
+
+                valid_energ = np.mean(over_fit(valid_idx, valid_hist_idx.ravel()))
+                degree_over_fit = np.abs(train_energ - valid_energ) # define in the paper of Geoffrey Hinton
+
+                
+        print 'Training epoch %d, cost is %f, over-fit %f'% (epoch, numpy.mean(mean_cost), degree_over_fit)
 
     end_time = time.clock()
 
@@ -491,7 +529,7 @@ if __name__ == '__main__':
         dtype=theano.config.floatX)
 
     generated_series = crbm.generate(orig_data, orig_history, n_samples=100,
-                                     n_gibbs=100)
+                                     n_gibbs=6)
     proup = crbm.propup(orig_data, orig_history)
     
     # append initialization
